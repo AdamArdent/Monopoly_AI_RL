@@ -1,8 +1,34 @@
-import numpy as np
+import numpy as np  # Import the numpy library, commonly used for numerical operations.
+from typing import List, Dict, Any # Import typing hints for better code readability and maintainability.
+
 class Board:
+    """
+    Represents the game board for a Monopoly-like game.
+
+    Attributes:
+        board (List[Dict[str, Any]]): A list of dictionaries, where each dictionary represents a square on the board
+                                       with its properties (name, type, price, rent, etc.).
+        property_order (List[str]): A list containing the names of all purchasable properties, stations, and utilities
+                                    in their order on the board.
+        property_data (np.ndarray): A numpy array containing structured data for purchasable properties,
+                                    including price, rent levels, mortgage value, house cost, color ID, and color group size.
+        property_max (np.ndarray): A numpy array containing the maximum values for each data point in `property_data`.
+        property_min (np.ndarray): A numpy array containing the minimum values for each data point in `property_data`.
+    """
     def __init__(self):
-        print("Initializing Board")
+        """
+        Initializes the game board with all squares and their associated data.
+        """
+        print("Initializing Board") # Console output to indicate board initialization.
         self.board = [
+            # Define each square on the board as a dictionary
+            # 'name': Name of the square
+            # 'type': Type of square (start, property, community_chest, tax, station, jail, free_parking, go_to_jail, utility, chance)
+            # 'price': Purchase price (0 for non-purchasable squares)
+            # 'rent': Base rent or tax amount (0 for non-rentable squares)
+            # 'hypothèque': Mortgage value (0 for non-mortgageable squares)
+            # Additional keys for properties: color_code, H1-H4 (rent with houses), hotel (rent with hotel)
+
             {"name": "Départ", "type": "start", "price": 0, "rent": 0, "hypothèque": 0},
             {"name": "Boulevard de Belleville", "type": "property", "price": 60, "rent": 2, "color_code": "brown",
              "H1": 10, "H2": 30, "H3": 90, "H4": 160, "hotel": 250, "hypothèque": 30},
@@ -71,37 +97,97 @@ class Board:
             {"name": "Rue de la Paix", "type": "property", "price": 400, "rent": 50, "color_code": "dark_blue",
              "H1": 200, "H2": 600, "H3": 1400, "H4": 1700, "hotel": 2000, "hypothèque": 200}
         ]
-        self._init_property_data()
+        self._init_property_data() # Call helper method to initialize structured property data.
 
+        # This part seems redundant as it's also done in _init_property_data,
         self.property_order = [
             case['name'] for case in self.board
             if case['type'] in ['property', 'station', 'utility']
         ]
 
-    def get_position(self, property_name):
-        """Retourne l'index d'une propriété par son nom"""
+    def get_position(self, property_name: str) -> int:
+        """
+        Returns the index of a square by its name.
+
+        Args:
+            property_name (str): The name of the square to find.
+
+        Returns:
+            int: The index of the square in the board list, or -1 if not found.
+        """
         for index, case in enumerate(self.board):
             if case["name"] == property_name:
                 return index
-        return -1
+        return -1 # Return -1 if the property name is not found.
 
-    def get_case(self, index):
-        """Retourne la case à un indice donné"""
+    def get_case(self, index: int) -> Dict[str, Any]:
+        """
+        Returns the square at a given index.
+
+        Args:
+            index (int): The index of the square to retrieve.
+
+        Returns:
+            Dict[str, Any]: The dictionary representing the square.
+
+        Raises:
+            ValueError: If the provided index is out of the valid range for the board.
+        """
         if 0 <= index < len(self.board):
             return self.board[index]
         else:
-            raise ValueError("Indice de case invalide.")
+            raise ValueError("Invalid case index.") # Raise error for out-of-bounds index.
 
-    def move_player(self, current_position, dice_roll):
-        """Déplace un joueur sur le plateau"""
-        current_position = (current_position + dice_roll) % len(self.board)
-        return current_position
+    def move_player(self, current_position: int, dice_roll: int) -> int:
+        """
+        Calculates the new position of a player after a dice roll, wrapping around the board.
+
+        Args:
+            current_position (int): The player's current position (index) on the board.
+            dice_roll (int): The result of the dice roll.
+
+        Returns:
+            int: The player's new position (index) after the move.
+        """
+        # Calculate new position, using modulo to wrap around the board length
+        new_position = (current_position + dice_roll) % len(self.board)
+        return new_position
+
+    def get_property(self, name: str) -> Dict[str, Any] | None:
+        """
+        Finds and returns a specific property, station, or utility by its name.
+
+        Args:
+            name (str): The name of the property, station, or utility.
+
+        Returns:
+            Dict[str, Any] | None: The dictionary representing the square if found, otherwise None.
+        """
+        # Use a generator expression and next() to find the first matching square
+        return next((c for c in self.board if c["name"] == name), None)
+
+    def get_color_group(self, color_code: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves all properties belonging to a specific color group or type (like stations).
+
+        Args:
+            color_code (str): The color code or type identifier (e.g., 'brown', 'station').
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries for squares matching the color code.
+        """
+        # Filter the board list to find all squares with the given color code
+        return [c for c in self.board if c.get("color_code") == color_code]
 
     def _init_property_data(self):
-        """Initialise les données structurées des propriétés."""
-        self.property_order = []
-        self.property_data = []
+        """
+        Initializes structured data for properties, stations, and utilities into a numpy array
+        for easier numerical processing.
+        """
+        self.property_order = [] # List to store names of purchasable properties in order
+        self.property_data = [] # List to temporarily store property data before converting to numpy
 
+        # Mapping of color codes to integer IDs
         color_mapping = {
             'brown': 0,
             'light_blue': 1,
@@ -112,29 +198,35 @@ class Board:
             'green': 6,
             'dark_blue': 7,
             'station': 8,
-            'utility': 9
+            'utility': 9,
+            "special": 10 # Default ID for squares without standard color groups
         }
 
         for case in self.board:
+            # Process only purchasable types (properties, stations, utilities)
             if case["type"] in ['property', 'station', 'utility']:
                 self.property_order.append(case["name"])
+                # Append a list of numerical data points for the current property
                 self.property_data.append([
-                    # Données de base
-                    case["price"],  # Prix d'achat
-                    case.get("rent", 0),  # Loyer de base
-                    case.get("H1", 0),  # Loyer avec 1 maison
-                    case.get("H2", case.get("rent", 0)),  # Loyer avec 2 maisons
-                    case.get("H3", case.get("rent", 0)),  # Loyer avec 3 maisons
-                    case.get("H4", case.get("rent", 0)),  # Loyer avec 4 maisons
-                    case.get("hotel", case.get("rent", 0)),  # Loyer avec hôtel
-                    case.get("hypothèque", 0),  # Valeur hypothécaire
-                    case.get("house_cost", case["price"] // 2),  # Coût par maison
-                    color_mapping.get(case.get("color_code", "special"), 10),  # ID couleur
-                    len([c for c in self.board if c.get("color_code") == case.get("color_code")])
-                    # Taille du groupe de couleur
+                    # Basic Data / Données de base
+                    case["price"],  # Purchase Price / Prix d'achat
+                    case.get("rent", 0),  # Base Rent / Loyer de base
+                    case.get("H1", 0),  # Rent with 1 House / Loyer avec 1 maison
+                    case.get("H2", case.get("rent", 0)),  # Rent with 2 Houses / Loyer avec 2 maisons (default to base rent if not specified)
+                    case.get("H3", case.get("rent", 0)),  # Rent with 3 Houses / Loyer avec 3 maisons
+                    case.get("H4", case.get("rent", 0)),  # Rent with 4 Houses / Loyer avec 4 maisons
+                    case.get("hotel", case.get("rent", 0)),  # Rent with Hotel / Loyer avec hôtel
+                    case.get("hypothèque", 0),  # Mortgage Value / Valeur hypothécaire
+                    # House cost is often half the property price, but can be specified.
+                    case.get("house_cost", case["price"] // 2),  # Cost per House / Coût par maison
+                    color_mapping.get(case.get("color_code", "special"), 10),  # Color Group ID / ID couleur
+                    # Size of the color group the property belongs to
+                    len([c for c in self.board if c.get("color_code") == case.get("color_code") if case.get("color_code") is not None])
+                    # Color Group Size / Taille du groupe de couleur (Only count properties within the same color group)
                 ])
-        # Conversion en numpy array
+        # Convert the list of property data into a numpy array for efficient processing
         self.property_data = np.array(self.property_data, dtype=np.int32)
-        # Calcul des maxima globaux
-        self.property_max = np.max(self.property_data, axis=0)
-        self.property_min = np.min(self.property_data, axis=0)
+
+        # Calculate global maximum and minimum values for each data column in property_data
+        self.property_max = np.max(self.property_data, axis=0) # Global Maxima / Maxima globaux
+        self.property_min = np.min(self.property_data, axis=0) # Global Minima / Minima globaux

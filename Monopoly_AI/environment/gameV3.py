@@ -680,7 +680,7 @@ if __name__ == "__main__":
     # For human play, use this:
     game = MonopolyGame()
     game.start()
-    print("error zob")
+
     # For RL training, use this:
     env = MonopolyRLEnv()
     initial_obs, initial_info = env.reset()
