@@ -6,11 +6,22 @@ from environment.player import Player
 import gymnasium as gym
 import random
 import numpy as np
+
+# Number of properties in the Monopoly game
 NUM_PROPERTIES = 28
+# Maximum amount of money a player can have
 MAX_MONEY = 10000
+# Number of cases on the Monopoly board
 NUM_CASE = 40
 
+
 class Game(gym.Env):
+    """
+    Monopoly game environment implementing the Gymnasium interface.
+    This class represents a complete Monopoly game that can be used for
+    reinforcement learning training or human play.
+    """
+
     def __init__(self):
         print("Initializing Game")
         self.players = self._initialize_players()
@@ -20,26 +31,27 @@ class Game(gym.Env):
             case['name'] for case in self.board.board
             if case['type'] in ['property', 'station', 'utility']
         ]
-        # Vérification de la cohérence avec NUM_PROPERTIES
-        assert len(self.property_order) == NUM_PROPERTIES, "Incohérence dans les propriétés"
-        # Récupération directe depuis le Board
+        # Verify consistency with NUM_PROPERTIES
+        assert len(self.property_order) == NUM_PROPERTIES, "Inconsistency in properties count"
+        # Direct retrieval from the Board
         self.property_order = self.board.property_order
         self.property_data = self.board.property_data
-        # Normalisation Min-Max
-        self.property_data_norm = (self.board.property_data - self.board.property_min) / (self.board.property_max - self.board.property_min + 1e-8)
-        # Définir l'espace d'observation enrichi
+        # Min-Max normalization
+        self.property_data_norm = (self.board.property_data - self.board.property_min) / (
+                    self.board.property_max - self.board.property_min + 1e-8)
+        # Define the enhanced observation space
         self.observation_space = gym.spaces.Dict({
             "self_money": gym.spaces.Box(low=0, high=MAX_MONEY, shape=(1,), dtype=np.int32),
             "self_position": gym.spaces.Discrete(NUM_CASE),
             "self_properties": gym.spaces.MultiBinary(NUM_PROPERTIES),
-            "others_money": gym.spaces.Box(low=0, high=MAX_MONEY, shape=(3,), dtype=np.int32),  # 3 autres joueurs max
+            "others_money": gym.spaces.Box(low=0, high=MAX_MONEY, shape=(3,), dtype=np.int32),  # Max 3 other players
             "active_players": gym.spaces.MultiBinary(4),
             "others_properties": gym.spaces.Box(
                 low=0,
-                high=5,  # 0-5 maisons/hôtel
+                high=5,  # 0-5 houses/hotel
                 shape=(3, NUM_PROPERTIES),
                 dtype=np.int8
-            ),  # Matrice 3x28
+            ),  # 3x28 matrix
             "others_positions": gym.spaces.Box(low=0, high=NUM_CASE, shape=(3,), dtype=np.int32),
             "self_houses": gym.spaces.Box(low=0, high=5, shape=(NUM_PROPERTIES,), dtype=np.int8),
             "all_properties": gym.spaces.Box(
@@ -60,24 +72,32 @@ class Game(gym.Env):
                 "can_trade": gym.spaces.MultiBinary(1)
             }),
         })
-        # Track le joueur actif pour le multi-agent
+        # Track active player for multi-agent mode
         self.current_player_idx = 0
 
         self.action_space = gym.spaces.Dict({
-            "action_type": gym.spaces.Discrete(5),  # 0-4 correspondant aux choix
-            "property_idx": gym.spaces.Discrete(NUM_PROPERTIES),  # Pour les actions liées aux propriétés,
-            # veux acheter prop ou non, choisis la prop sur laquelle il veut build --> int
-            "trade_partner": gym.spaces.Discrete(3),  # Index des autres joueurs
-            "trade_amount": gym.spaces.Box(low=0, high=MAX_MONEY, shape=(1,), dtype=np.int32)#pour auction,
+            "action_type": gym.spaces.Discrete(5),  # 0-4 corresponding to choices
+            "property_idx": gym.spaces.Discrete(NUM_PROPERTIES),  # For property-related actions,
+            # whether to buy property or not, choosing property to build on --> int
+            "trade_partner": gym.spaces.Discrete(3),  # Index of other players
+            "trade_amount": gym.spaces.Box(low=0, high=MAX_MONEY, shape=(1,), dtype=np.int32)  # For auctions/trades
         })
 
     def _get_obs_for_player(self, player: Player):
-        """Observation pour un joueur, incluant les données des autres et les stats des propriétés."""
+        """
+        Creates observation for a player, including data about other players and property stats.
+
+        Args:
+            player: The player for whom to generate the observation
+
+        Returns:
+            Dictionary containing the complete observation state
+        """
         other_players = [p for p in self.players if p != player and not p.bankrupt]
-        # Calcul des actions valides
+        # Calculate valid actions
         mortgageable = [int(prop in self._get_mortgageable_properties(player)) for prop in self.property_order]
         buildable = [int(prop in self._get_buildable_properties(player)) for prop in self.property_order]
-        # Récupérer les données des autres joueurs
+        # Get data for other players
         others_money = np.zeros(3, dtype=np.int32)
         others_properties = np.zeros((3, NUM_PROPERTIES), dtype=np.int8)
         others_positions = np.zeros(3, dtype=np.int32)
@@ -91,7 +111,7 @@ class Game(gym.Env):
             others_houses[i] = self._get_houses_vector(other)
 
         return {
-            # État personnel
+            # Personal state
             "self_money": np.array([player.money], dtype=np.int32),
             "self_position": player.position,
             "self_properties": self._properties_to_binary(player),
@@ -102,30 +122,47 @@ class Game(gym.Env):
                 "can_trade": np.array([int(len(player.properties) > 0)], dtype=np.int8)
             },
 
-            # État des autres joueurs
+            # Other players' state
             "others_money": others_money,
             "others_properties": others_properties,
             "others_positions": others_positions,
             "others_houses": others_houses,
             "active_players": np.array(active_players, dtype=np.int8),
 
-            # Données statiques des propriétés (prix, loyers, etc.)
-            "all_properties": self.board.property_data,  # Directement depuis le Board
+            # Static property data (prices, rents, etc.)
+            "all_properties": self.board.property_data,  # Directly from the Board
         }
+
     def _get_houses_vector(self, player: Player):
-        """Version améliorée avec vérification de propriété"""
+        """
+        Creates a vector representing houses owned by the player for each property.
+
+        Args:
+            player: The player whose houses to count
+
+        Returns:
+            NumPy array of house counts (-1 if property not owned)
+        """
         houses = np.zeros(NUM_PROPERTIES, dtype=np.int8)
         for idx, prop_name in enumerate(self.property_order):
-            # Vérifier si le joueur possède la propriété
+            # Check if player owns the property
             if prop_name in player.properties:
                 case = next(c for c in self.board.board if c["name"] == prop_name)
                 houses[idx] = min(case.get("houses", 0), 5)
             else:
-                houses[idx] = -1  # Marqueur pour propriété non possédée
+                houses[idx] = -1  # Marker for unowned property
         return houses
 
     def _properties_to_binary(self, player):
-        """Convertit les propriétés du joueur en vecteur binaire."""
+        """
+        Converts player's properties to a binary vector.
+
+        Args:
+            player: The player whose properties to convert
+
+        Returns:
+            Binary vector where 1 indicates ownership
+        """
         binary_vector = np.zeros(NUM_PROPERTIES, dtype=np.int8)
         for idx, prop_name in enumerate(self.property_order):
             if prop_name in player.properties:
@@ -133,40 +170,85 @@ class Game(gym.Env):
         return binary_vector
 
     def _get_info(self):
-       pass
+        pass
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        """
+        Resets the environment to an initial state.
+
+        Args:
+            seed: Random seed for reproducibility
+            options: Additional options for reset
+
+        Returns:
+            Initial observation for the current player
+        """
         super().reset(seed=seed)
         observation = self._get_obs_for_player(self.players[self.current_player_idx])
         return observation
         pass
 
     def _select_mortgage_property(self, player: Player) -> str:
-        """Sélectionne automatiquement une propriété à hypothéquer selon la politique de l'agent"""
+        """
+        Automatically selects a property to mortgage based on agent policy.
+
+        Args:
+            player: The player who needs to mortgage
+
+        Returns:
+            Property name to mortgage
+
+        Raises:
+            InvalidAction: If no mortgageable property is available
+        """
         mortgageable = [
             prop for prop in player.properties
             if not self._get_board_property(prop)["mortgaged"]
         ]
 
-        # Ici vous utiliserez la politique de l'agent pour choisir
-        # Pour l'exemple, on prend la première propriété hypothécable
+        # Here you would use agent policy to choose
+        # For example, take the first mortgageable property
         if mortgageable:
             return mortgageable[0]
-        raise self.InvalidAction("Aucune propriété hypothécable disponible")
+        raise self.InvalidAction("No mortgageable property available")
 
     def _validate_property_ownership(self, player: Player, property_name: str, owner: Player = None) -> dict:
-        """Valide la possession d'une propriété (méthode helper réutilisable)"""
+        """
+        Validates property ownership (reusable helper method).
+
+        Args:
+            player: The player to validate
+            property_name: The property to check
+            owner: Optional specific owner to check against
+
+        Returns:
+            Property dictionary if valid
+
+        Raises:
+            InvalidAction: If ownership validation fails
+        """
         prop = self._get_board_property(property_name)
         if not prop:
-            raise self.InvalidAction(f"Propriété {property_name} introuvable")
+            raise self.InvalidAction(f"Property {property_name} not found")
         if owner and property_name not in owner.properties:
-            raise self.InvalidAction(f"{owner.name} ne possède pas {property_name}")
+            raise self.InvalidAction(f"{owner.name} does not own {property_name}")
         if property_name not in player.properties and not owner:
-            raise self.InvalidAction(f"Vous ne possédez pas {property_name}")
+            raise self.InvalidAction(f"You do not own {property_name}")
         return prop
 
     def _select_build_property(self, player: Player) -> str:
-        """Sélectionne automatiquement une propriété où construire selon la politique de l'agent"""
+        """
+        Automatically selects a property to build on based on agent policy.
+
+        Args:
+            player: The player who wants to build
+
+        Returns:
+            Property name to build on
+
+        Raises:
+            InvalidAction: If no buildable property is available
+        """
         buildable = []
         for prop in player.properties:
             case = self._get_board_property(prop)
@@ -175,43 +257,54 @@ class Game(gym.Env):
                 if all(p in player.properties for p in color_group):
                     buildable.append(prop)
 
-        # Prioriser les propriétés avec le moins de maisons
+        # Prioritize properties with fewest houses
         if buildable:
             return min(buildable, key=lambda p: self._get_board_property(p)["houses"])
-        raise self.InvalidAction("Aucune propriété constructible disponible")
+        raise self.InvalidAction("No buildable property available")
 
     def _cycle_to_next_player(self):
-        """Passe au prochain joueur non bankrupt."""
+        """
+        Cycles to the next non-bankrupt player.
+        """
         for _ in range(len(self.players)):
             self.current_player_idx = (self.current_player_idx + 1) % len(self.players)
             if not self.players[self.current_player_idx].bankrupt:
                 break
 
     def step(self, action):
+        """
+        Executes an action and updates the environment.
+
+        Args:
+            action: The action to execute
+
+        Returns:
+            Tuple of (observation, reward, done, info)
+        """
         player = self.players[self.current_player_idx]
         reward = 0
         done = False
         info = {}
 
         try:
-            if action == 0:  # Hypothèque
+            if action == 0:  # Mortgage
                 prop = self._select_mortgage_property(player)
                 self._handle_mortgage(player, prop)
 
-            elif action == 1:  # Construction
+            elif action == 1:  # Build
                 prop = self._select_build_property(player)
                 self._handle_build(player, prop)
 
-            elif action["action_type"] == 2:  # Trade argent/propriété
+            elif action["action_type"] == 2:  # Trade money for property
                 partner = self._get_other_players(player)[action["trade_partner"]]
                 prop = self.property_order[action["property_idx"]]
                 self._handle_trade(player, partner, prop, action["trade_amount"])
 
-            elif action["action_type"] == 3:  # Trade propriété/propriété
+            elif action["action_type"] == 3:  # Trade property for property
                 partner = self._get_other_players(player)[action["trade_partner"]]
                 self._handle_property_swap(player, partner, action["property_idx"])
 
-            elif action["action_type"] == 4:  # Ne rien faire
+            elif action["action_type"] == 4:  # Do nothing
                 pass
 
             reward = self._calculate_reward(player)
@@ -226,46 +319,83 @@ class Game(gym.Env):
         return next_obs, reward, done, info
 
     def _handle_mortgage(self, player: Player, property_name: str):
-        """Utilise la méthode helper pour la validation"""
+        """
+        Handles mortgage action using the helper method for validation.
+
+        Args:
+            player: Player mortgaging the property
+            property_name: Property to mortgage
+
+        Raises:
+            InvalidAction: If property can't be mortgaged
+        """
         prop = self._validate_property_ownership(player, property_name)
 
         if prop.get("mortgaged", False):
-            raise self.InvalidAction(f"{property_name} est déjà hypothéquée")
+            raise self.InvalidAction(f"{property_name} is already mortgaged")
 
         prop["mortgaged"] = True
         player.receive(prop["hypothèque"])
-        print(f"{player.name} a hypothéqué {property_name}")
+        print(f"{player.name} has mortgaged {property_name}")
 
     def _handle_build(self, player: Player, property_name: str):
-        """Gère la construction d'une maison"""
+        """
+        Handles building a house on a property.
+
+        Args:
+            player: Player building the house
+            property_name: Property to build on
+
+        Raises:
+            InvalidAction: If building conditions are not met
+        """
         prop = self._get_board_property(property_name)
         if not prop:
-            raise InvalidAction(f"Propriété {property_name} introuvable")
+            raise InvalidAction(f"Property {property_name} not found")
 
-        # Vérification de la possession complète du groupe
+        # Check for complete color group ownership
         color_group = self._get_color_group(prop["color_code"])
         if any(p not in player.properties for p in color_group):
-            raise InvalidAction("Possession incomplète du groupe de couleurs")
+            raise InvalidAction("Incomplete color group ownership")
 
-        # Vérification des fonds
+        # Check funds
         house_cost = prop["price"] // 2
         if player.money < house_cost:
-            raise InvalidAction("Fonds insuffisants")
+            raise InvalidAction("Insufficient funds")
 
         prop["houses"] = min(prop.get("houses", 0) + 1, 5)
         player.pay(house_cost)
 
     def _get_other_players(self, current_player: Player) -> List[Player]:
-        """Retourne la liste des autres joueurs actifs"""
+        """
+        Returns a list of other active players.
+
+        Args:
+            current_player: The current player to exclude
+
+        Returns:
+            List of other non-bankrupt players
+        """
         return [p for p in self.players if p != current_player and not p.bankrupt]
 
     @staticmethod
     def _handle_trade(buyer: Player, seller: Player, property_name: str, amount: int):
-        """Gère un échange argent contre propriété (méthode static)"""
+        """
+        Handles money for property trade (static method).
+
+        Args:
+            buyer: Player buying the property
+            seller: Player selling the property
+            property_name: Property being traded
+            amount: Transaction amount
+
+        Raises:
+            InvalidAction: If trade conditions are not met
+        """
         if property_name not in seller.properties:
-            raise Game.InvalidAction(f"{seller.name} ne possède pas {property_name}")
+            raise Game.InvalidAction(f"{seller.name} does not own {property_name}")
         if buyer.money < amount:
-            raise Game.InvalidAction(f"{buyer.name} n'a pas assez d'argent")
+            raise Game.InvalidAction(f"{buyer.name} doesn't have enough money")
 
         buyer.pay(amount)
         seller.receive(amount)
@@ -273,12 +403,22 @@ class Game(gym.Env):
         buyer.properties.append(property_name)
 
     def _handle_property_swap(self, player: Player, partner: Player, property_name: str):
-        """Utilise la méthode helper pour la validation"""
+        """
+        Uses helper method for property swap validation.
+
+        Args:
+            player: First player in the swap
+            partner: Second player in the swap
+            property_name: Property to swap
+
+        Raises:
+            InvalidAction: If swap conditions are not met
+        """
         player_prop = self._validate_property_ownership(player, property_name)
         partner_prop = self._validate_property_ownership(partner, property_name, owner=partner)
 
         if player_prop not in player.properties:
-            raise InvalidAction("Propriété invalide")
+            raise InvalidAction("Invalid property")
 
         player.properties.remove(player_prop)
         partner.properties.append(player_prop)
@@ -286,24 +426,54 @@ class Game(gym.Env):
         player.properties.append(partner_prop)
 
     def _get_color_group(self, color_code: str) -> List[str]:
-        """Retourne toutes les propriétés d'un même groupe de couleur"""
+        """
+        Returns all properties in a color group.
+
+        Args:
+            color_code: Color code to search for
+
+        Returns:
+            List of property names in the same color group
+        """
         return [
             p["name"] for p in self.board.board
             if p.get("color_code") == color_code
                and p["type"] == "property"
         ]
 
-    # Ajouter cette classe d'exception interne
+    # Internal exception class
     class InvalidAction(Exception):
+        """
+        Custom exception for invalid player actions.
+        """
+
         def __init__(self, message: str):
             super().__init__(message)
             self.message = message
 
     def _get_mortgageable_properties(self, player):
+        """
+        Returns properties that can be mortgaged.
+
+        Args:
+            player: Player whose properties to check
+
+        Returns:
+            List of mortgageable property names
+        """
         return [prop for prop in player.properties
                 if not self._get_board_property(prop)["mortgaged"]]
 
     def _get_buildable_properties(self, player):
+        """
+        Returns properties where houses can be built.
+
+        Args:
+            player: Player whose properties to check
+
+        Returns:
+            List of buildable property names
+        """
         buildable = []
         for prop in player.properties:
             case = self._get_board_property(prop)
@@ -314,21 +484,29 @@ class Game(gym.Env):
         return buildable
 
     def _calculate_reward(self, player):
-        """Reward function combinant plusieurs facteurs"""
+        """
+        Reward function combining multiple factors.
+
+        Args:
+            player: Player to calculate reward for
+
+        Returns:
+            Calculated reward value
+        """
         reward = 0
 
-        # Récompense pour l'argent gagné
+        # Reward for money
         reward += player.money * 0.01
 
-        # Récompense pour les propriétés
+        # Reward for properties
         reward += len(player.properties) * 5
 
-        # Récompense pour les maisons construites
+        # Reward for built houses
         for prop in player.properties:
             case = self._get_board_property(prop)
             reward += case.get("houses", 0) * 10
 
-        # Pénalité pour faillite
+        # Penalty for bankruptcy
         if player.bankrupt:
             reward -= 1000
 
@@ -336,17 +514,26 @@ class Game(gym.Env):
 
     @staticmethod
     def _initialize_players() -> List[Player]:
+        """
+        Initializes players for the game.
+
+        Returns:
+            List of Player objects
+        """
         return [Player(name=f"Player {i + 1}") for i in range(4)]
 
     def _init_property_states(self):
+        """
+        Initializes house counts for all properties.
+        """
         for case in self.board.board:
             if case["type"] == "property":
                 case.setdefault("houses", 0)
 
     def start(self):
         """
-        Boucle principale du jeu. Tant qu'il reste plus d'un joueur (non en faillite),
-        chaque joueur joue à son tour.
+        Main game loop. Continues until only one player remains (not bankrupt).
+        Each player takes their turn in sequence.
         """
         round_number = 1
         while len(self.players) > 1:
@@ -354,52 +541,68 @@ class Game(gym.Env):
             for player in self.players.copy():
                 if player.bankrupt:
                     continue
-                print(f"\n--- Tour de {player.name} ---")
+                print(f"\n--- {player.name}'s turn ---")
                 self._handle_player_turn(player)
                 if len(self.players) == 1:
                     break
             round_number += 1
 
         if self.players:
-            print(f"\nFélicitations, {self.players[0].name} a gagné la partie!")
+            print(f"\nCongratulations, {self.players[0].name} won the game!")
         else:
-            print("La partie s'est terminée sans vainqueur.")
+            print("The game ended without a winner.")
 
     def _handle_player_turn(self, player: Player):
         """
-        Gère le tour d'un joueur :
-          - Le joueur appuie sur Entrée pour lancer les dés.
-          - Le joueur lance les dés et avance sur le plateau.
-          - On récupère la case d'arrivée et on y applique l'action correspondante.
+        Handles a player's turn:
+          - Player presses Enter to roll dice
+          - Player rolls dice and moves on the board
+          - The arrival space and corresponding action are applied
+
+        Args:
+            player: Player whose turn it is
         """
         if player.bankrupt:
-            print(f"{player.name} est en faillite et ne peut plus jouer.")
+            print(f"{player.name} is bankrupt and cannot play.")
             return
 
-        input(f"{player.name}, appuyez sur Entrée pour lancer les dés...")
+        input(f"{player.name}, press Enter to roll the dice...")
         dice_roll = self._roll_dice()
-        print(f"{player.name} a lancé les dés et obtenu {dice_roll}.")
+        print(f"{player.name} rolled {dice_roll}.")
 
-        # Mise à jour de la position du joueur
+        # Update player position
         player.position = self.board.move_player(player.position, dice_roll)
         current_case = self.board.get_case(player.position)
-        print(f"{player.name} se déplace vers la case '{current_case['name']}'.")
+        print(f"{player.name} moves to '{current_case['name']}'.")
 
-        # Traitement de la case d'arrivée
+        # Process arrival space
         self._handle_case_action(player, current_case)
 
     @staticmethod
     def _roll_dice() -> int:
+        """
+        Rolls the dice.
+
+        Returns:
+            Total dice roll value
+        """
         return random.randint(1, 12)
 
     def _handle_case_action(self, player: Player, case: dict):
+        """
+        Handles action based on the case type.
+
+        Args:
+            player: Player landing on the case
+            case: Case dictionary with type and data
+        """
         if case["type"] == "property":
             self._handle_property_case(player, case)
         elif case["type"] == "tax":
             self._handle_tax_case(player, case)
         elif case["type"] == "start":
             player.money += 200
-            print(f"{player.name} reçoit 200€ en passant par la case 'Départ'.")
+            print(f"{player.name} receives 200€ for passing Start.")
         elif case["type"] == "community_chest":
             self._handle_action_case_community_chest(player, case)
         elif case["type"] == "chance":
@@ -408,40 +611,73 @@ class Game(gym.Env):
             self._handle_action_case_jail(player, case)
         elif case["type"] == "free_parking":
             player.money += 200
-            print(f"{player.name} reçoit 200€ sur 'Parc gratuit'.")
+            print(f"{player.name} receives 200€ on Free Parking.")
         elif case["type"] == "utility":
-            # Logique spécifique aux compagnies (non implémentée ici)
+            # Specific logic for utilities (not implemented here)
             pass
         else:
-            print(f"Aucune action définie pour le type '{case['type']}'.")
+            print(f"No action defined for type '{case['type']}'.")
 
     def _handle_property_case(self, player: Player, case: dict):
+        """
+        Handles landing on a property space.
+
+        Args:
+            player: Player landing on the property
+            case: Property case dictionary
+        """
         owner = Game.find_property_owner(self.players, case["name"])
         if not owner:
-            # Propose au joueur d'acheter la propriété
-            choice = input(f"{player.name}, voulez-vous acheter {case['name']} pour {case['price']}€ ? (o/n) : ").strip().lower()
+            # Offer player to buy the property
+            choice = input(
+                f"{player.name}, do you want to buy {case['name']} for {case['price']}€? (y/n) : ").strip().lower()
             if choice == "o":
                 Game._handle_property_purchase(player, case)
             else:
-                print(f"{player.name} a refusé d'acheter {case['name']}. L'enchère démarre.")
+                print(f"{player.name} declined to buy {case['name']}. Auction begins.")
                 self.auction_property(case["name"], starting_bid=case["price"])
         else:
             self._handle_rent_payment(player, case, owner)
 
     @staticmethod
     def find_property_owner(players: List[Player], property_name: str) -> Optional[Player]:
+        """
+        Finds the owner of a property.
+
+        Args:
+            players: List of all players
+            property_name: Property to find owner for
+
+        Returns:
+            Player who owns the property or None
+        """
         return next((p for p in players if property_name in p.properties), None)
 
     @staticmethod
     def _handle_property_purchase(player: Player, case: dict):
+        """
+        Handles purchasing a property.
+
+        Args:
+            player: Player buying the property
+            case: Property case dictionary
+        """
         if player.buy_property(case["name"], case["price"]):
-            print(f"✅ {player.name} a acheté {case['name']} ! Solde: {player.money}€")
+            print(f"✅ {player.name} bought {case['name']}! Balance: {player.money}€")
         else:
-            print(f"❌ {player.name} ne peut pas acheter {case['name']}")
+            print(f"❌ {player.name} cannot afford {case['name']}")
 
     def _handle_rent_payment(self, player: Player, case: dict, owner: Player):
+        """
+        Handles rent payment when landing on another player's property.
+
+        Args:
+            player: Player paying rent
+            case: Property case dictionary
+            owner: Owner of the property
+        """
         if owner == player:
-            print(f"🌟 {player.name} est déjà propriétaire")
+            print(f"🌟 {player.name} already owns this property")
             return
 
         if case["type"] == "station":
@@ -450,11 +686,11 @@ class Game(gym.Env):
             base_rent = case.get("rent", 25)
             multiplier = 2 ** (station_count - 1)
             rent = base_rent * multiplier
-            print(f"{owner.name} possède {station_count} station(s) - le loyer est maintenant de {rent}€.")
+            print(f"{owner.name} owns {station_count} station(s) - rent is now {rent}€.")
         else:
             rent = Game.calculate_rent(case)
 
-        print(f"💸 Loyer dû à {owner.name}: {rent}€")
+        print(f"💸 Rent due to {owner.name}: {rent}€")
         if player.money < rent:
             self.action_in_game(player)
         if player.money < rent:
@@ -463,10 +699,19 @@ class Game(gym.Env):
 
         player.pay(rent)
         owner.receive(rent)
-        print(f"Solde {player.name}: {player.money}€ → {owner.name}: {owner.money}€")
+        print(f"Balance {player.name}: {player.money}€ → {owner.name}: {owner.money}€")
 
     @staticmethod
     def calculate_rent(case: dict) -> int:
+        """
+        Calculates rent for a property based on houses.
+
+        Args:
+            case: Property case dictionary
+
+        Returns:
+            Calculated rent amount
+        """
         try:
             houses = case.get("houses", 0)
             return {
@@ -474,10 +719,17 @@ class Game(gym.Env):
                 5: case["hotel"]
             }.get(houses, case.get(f"H{houses}", case["rent"]))
         except KeyError as e:
-            print(f"Erreur configuration: {e}")
+            print(f"Configuration error: {e}")
             return case["rent"]
 
     def _handle_tax_case(self, player: Player, case: dict):
+        """
+        Handles landing on a tax space.
+
+        Args:
+            player: Player landing on tax space
+            case: Tax case dictionary
+        """
         tax = case["price"]
         if player.money < tax:
             self.action_in_game(player)
@@ -485,17 +737,25 @@ class Game(gym.Env):
             self.handle_bankruptcy(player)
             return
         player.pay(tax)
-        print(f"⚖️ {player.name} paie {tax}€ de taxes. Solde: {player.money}€")
+        print(f"⚖️ {player.name} pays {tax}€ in taxes. Balance: {player.money}€")
 
     def _handle_action_case_jail(self, player: Player, case: dict, jail_price: int = 50):
+        """
+        Handles jail-related actions.
+
+        Args:
+            player: Player in jail
+            case: Jail case dictionary
+            jail_price: Cost to get out of jail
+        """
         if case["type"] == "go_to_jail":
             jail_position = self.board.get_position("Prison/Simple visite")
             player.position = jail_position
-            print(f"{player.name} est envoyé en prison !")
-            print("Choisissez une action :")
-            print(f"1. Payer {jail_price}€ pour sortir immédiatement")
-            print("2. Lancer les dés pour tenter de sortir")
-            choice = input("Votre choix : ").strip()
+            print(f"{player.name} is sent to jail!")
+            print("Choose an action:")
+            print(f"1. Pay {jail_price}€ to get out immediately")
+            print("2. Roll dice to try to get out")
+            choice = input("Your choice: ").strip()
             if choice == "1":
                 if player.money < jail_price:
                     self.handle_bankruptcy(player)
@@ -505,57 +765,61 @@ class Game(gym.Env):
                     dice_roll = self._roll_dice()
                     player.position = self.board.move_player(player.position, dice_roll)
                     current_case = self.board.get_case(player.position)
-                    print(f"{player.name} avance de {dice_roll} cases et arrive sur {current_case['name']}.")
+                    print(f"{player.name} advances {dice_roll} spaces and lands on {current_case['name']}.")
                     self._handle_case_action(player, current_case)
             elif choice == "2":
                 if not hasattr(player, "jail_turns"):
                     player.jail_turns = 0
                 die1 = random.randint(1, 6)
                 die2 = random.randint(1, 6)
-                print(f"{player.name} lance les dés: {die1} et {die2}.")
+                print(f"{player.name} rolls: {die1} and {die2}.")
                 if die1 == die2:
-                    print(f"{player.name} a fait un double et est libéré de prison !")
+                    print(f"{player.name} rolled doubles and is released from jail!")
                     player.jail_turns = 0
                     movement = die1 + die2
                     player.position = self.board.move_player(player.position, movement)
                     current_case = self.board.get_case(player.position)
-                    print(f"{player.name} avance de {movement} cases et arrive sur {current_case['name']}.")
+                    print(f"{player.name} advances {movement} spaces and lands on {current_case['name']}.")
                     self._handle_case_action(player, current_case)
                 else:
                     player.jail_turns += 1
                     if player.jail_turns >= 3:
-                        print(f"{player.name} n'a pas fait de double en 3 tentatives et est libéré de prison.")
+                        print(f"{player.name} didn't roll doubles in 3 attempts and is released from jail.")
                         player.jail_turns = 0
                         new_die1 = random.randint(1, 6)
                         new_die2 = random.randint(1, 6)
                         movement = new_die1 + new_die2
-                        print(f"{player.name} lance à nouveau les dés: {new_die1} et {new_die2}.")
+                        print(f"{player.name} rolls again: {new_die1} and {new_die2}.")
                         player.position = self.board.move_player(player.position, movement)
                         current_case = self.board.get_case(player.position)
-                        print(f"{player.name} avance de {movement} cases et arrive sur {current_case['name']}.")
+                        print(f"{player.name} advances {movement} spaces and lands on {current_case['name']}.")
                         self._handle_case_action(player, current_case)
                     else:
-                        print(f"{player.name} n'a pas fait de double et reste en prison (tentative {player.jail_turns}/3).")
+                        print(f"{player.name} didn't roll doubles and stays in jail (attempt {player.jail_turns}/3).")
             else:
-                print("Choix invalide. Le joueur reste en prison pour ce tour.")
+                print("Invalid choice. Player remains in jail for this turn.")
 
     def _handle_random_card_action(self, player: Player, actions: List[dict]):
         """
-        Exécute une action aléatoire à partir de la liste fournie.
-        La logique est commune aux cartes Chance et Community Chest.
+        Executes a random action from the provided list.
+        Logic is common to Chance and Community Chest cards.
+
+        Args:
+            player: Player drawing the card
+            actions: List of possible card actions
         """
         chosen_action = random.choice(actions)
         print(chosen_action["message"])
         action_type = chosen_action["type"]
 
         if action_type == "advance_to_go":
-            player.position = self.board.get_position("Départ")
+            player.position = self.board.get_position("Go")
             player.receive(chosen_action["amount"])
             print(
-                f"{player.name} est maintenant sur Départ et reçoit {chosen_action['amount']}€. Nouveau solde : {player.money}€.")
+                f"{player.name} is now on Go and receives {chosen_action['amount']}€. New balance: {player.money}€.")
         elif action_type == "gain_money":
             player.receive(chosen_action["amount"])
-            print(f"Le nouveau solde de {player.name} est de {player.money}€.")
+            print(f"The new balance of {player.name} is {player.money}€.")
         elif action_type == "lose_money":
             if player.money < chosen_action["amount"]:
                 self.action_in_game(player)
@@ -563,17 +827,17 @@ class Game(gym.Env):
                 self.handle_bankruptcy(player)
                 return
             player.pay(chosen_action["amount"])
-            print(f"Le nouveau solde de {player.name} est de {player.money}€.")
+            print(f"The new balance of {player.name} is {player.money}€.")
         elif action_type == "advance":
             player.position = self.board.move_player(player.position, chosen_action["spaces"])
             current_case = self.board.get_case(player.position)
-            print(f"{player.name} avance de {chosen_action['spaces']} cases et se retrouve sur {current_case['name']}.")
+            print(f"{player.name} moves forward {chosen_action['spaces']} spaces and lands on {current_case['name']}.")
             self._handle_case_action(player, current_case)
         elif action_type == "go_to_jail":
-            player.position = self.board.get_position("Allez en prison")
-            print(f"{player.name} est envoyé en prison !")
+            player.position = self.board.get_position("Go to Jail")
+            print(f"{player.name} is sent to jail!")
         elif action_type == "nothing":
-            print(f"Pas d'action supplémentaire pour {player.name}.")
+            print(f"No additional action for {player.name}.")
 
     def _handle_action_case_chance(self, player: Player, case: dict):
         if case["type"] == "chance":
@@ -581,30 +845,30 @@ class Game(gym.Env):
                 {
                     "type": "advance_to_go",
                     "amount": 200,
-                    "message": f"{player.name} avance jusqu'à Départ et reçoit 200€ !"
+                    "message": f"{player.name} advances to Go and collects 200€!"
                 },
                 {
                     "type": "gain_money",
                     "amount": 50,
-                    "message": f"{player.name} reçoit un dividende de 50€ de la banque."
+                    "message": f"{player.name} receives a dividend of 50€ from the bank."
                 },
                 {
                     "type": "lose_money",
                     "amount": 15,
-                    "message": f"{player.name} doit payer une amende de 15€ pour excès de vitesse."
+                    "message": f"{player.name} must pay a fine of 15€ for speeding."
                 },
                 {
                     "type": "advance",
                     "spaces": 2,
-                    "message": f"{player.name} avance de 2 cases."
+                    "message": f"{player.name} moves forward 2 spaces."
                 },
                 {
                     "type": "go_to_jail",
-                    "message": f"{player.name} va directement en prison !"
+                    "message": f"{player.name} goes directly to jail!"
                 },
                 {
                     "type": "nothing",
-                    "message": f"Aucune action particulière pour {player.name} cette fois."
+                    "message": f"No special action for {player.name} this time."
                 }
             ]
             self._handle_random_card_action(player, actions)
@@ -615,25 +879,25 @@ class Game(gym.Env):
                 {
                     "type": "gain_money",
                     "amount": 200,
-                    "message": f"{player.name} reçoit 200€ de la communauté !"
+                    "message": f"{player.name} receives 200€ from the community chest!"
                 },
                 {
                     "type": "lose_money",
                     "amount": 100,
-                    "message": f"{player.name} doit payer 100€ à la communauté."
+                    "message": f"{player.name} must pay 100€ to the community chest."
                 },
                 {
                     "type": "advance",
                     "spaces": 3,
-                    "message": f"{player.name} avance de 3 cases."
+                    "message": f"{player.name} moves forward 3 spaces."
                 },
                 {
                     "type": "go_to_jail",
-                    "message": f"{player.name} va directement en prison !"
+                    "message": f"{player.name} goes directly to jail!"
                 },
                 {
                     "type": "nothing",
-                    "message": f"Aucune action particulière pour {player.name} cette fois."
+                    "message": f"No special action for {player.name} this time."
                 }
             ]
             self._handle_random_card_action(player, actions)
@@ -646,21 +910,21 @@ class Game(gym.Env):
 
     def action_in_game(self, player: Player):
         """
-        Permet au joueur de réaliser une action en jeu pour améliorer sa situation financière.
-        Les options incluent :
-          1. Hypothéquer une propriété
-          2. Construire une maison
-          3. Trade: Acheter une propriété (argent contre propriété)
-          4. Trade: Échanger une propriété contre une autre propriété
-          5. Quitter (aucune action)
+        Allows the player to perform an in-game action to improve their financial situation.
+        Options include:
+          1. Mortgage a property
+          2. Build a house
+          3. Trade: Buy a property (money for property)
+          4. Trade: Exchange a property for another property
+          5. Quit (no action)
         """
-        print("\n--- Actions disponibles ---")
-        print("1. Hypothéquer une propriété")
-        print("2. Construire une maison")
-        print("3. Trade: Acheter une propriété à un autre joueur (argent contre propriété)")
-        print("4. Trade: Échanger une propriété contre une autre propriété")
-        print("5. Quitter (aucune action)")
-        choice = input("Votre choix : ").strip()
+        print("\n--- Available actions ---")
+        print("1. Mortgage a property")
+        print("2. Build a house")
+        print("3. Trade: Buy a property from another player (money for property)")
+        print("4. Trade: Exchange a property for another property")
+        print("5. Quit (no action)")
+        choice = input("Your choice: ").strip()
 
         if choice == "1":
             eligible_props = []
@@ -670,27 +934,28 @@ class Game(gym.Env):
                     if not board_prop.get("mortgaged", False):
                         eligible_props.append(prop)
             if not eligible_props:
-                print("Vous n'avez aucune propriété éligible à l'hypothèque.")
+                print("You have no properties eligible for mortgage.")
                 return
 
-            print("\nPropriétés éligibles à l'hypothèque :")
+            print("\nProperties eligible for mortgage:")
             for i, prop in enumerate(eligible_props, start=1):
                 board_prop = self._get_board_property(prop)
-                print(f"{i}. {prop} (Valeur hypothécaire : {board_prop['hypothèque']}€)")
-            selection = input("Sélectionnez la propriété à hypothéquer (numéro) : ").strip()
+                print(f"{i}. {prop} (Mortgage value: {board_prop['mortgage']}€)")
+            selection = input("Select the property to mortgage (number): ").strip()
             try:
                 sel = int(selection)
                 if sel < 1 or sel > len(eligible_props):
-                    print("Sélection invalide.")
+                    print("Invalid selection.")
                     return
                 chosen_prop = eligible_props[sel - 1]
                 board_prop = self._get_board_property(chosen_prop)
                 board_prop["mortgaged"] = True
-                mortgage_value = board_prop["hypothèque"]
+                mortgage_value = board_prop["mortgage"]
                 player.receive(mortgage_value)
-                print(f"{player.name} a hypothéqué {chosen_prop} et reçoit {mortgage_value}€. Nouveau solde : {player.money}€.")
+                print(
+                    f"{player.name} mortgaged {chosen_prop} and receives {mortgage_value}€. New balance: {player.money}€.")
             except ValueError:
-                print("Entrée invalide.")
+                print("Invalid input.")
 
         elif choice == "2":
             eligible_props = []
@@ -700,23 +965,23 @@ class Game(gym.Env):
                     if not board_prop.get("mortgaged", False):
                         eligible_props.append(prop)
             if not eligible_props:
-                print("Vous n'avez aucune propriété éligible pour construire des maisons.")
+                print("You have no properties eligible for building houses.")
                 return
 
-            print("\nPropriétés éligibles pour construire des maisons :")
+            print("\nProperties eligible for building a house:")
             for i, prop in enumerate(eligible_props, start=1):
                 board_prop = self._get_board_property(prop)
                 houses = board_prop.get("houses", 0)
-                print(f"{i}. {prop} (Maisons actuelles : {houses})")
-            selection = input("Sélectionnez la propriété sur laquelle construire une maison (numéro) : ").strip()
+                print(f"{i}. {prop} (Current houses: {houses})")
+            selection = input("Select the property to build a house on (number): ").strip()
             try:
                 sel = int(selection)
                 if sel < 1 or sel > len(eligible_props):
-                    print("Sélection invalide.")
+                    print("Invalid selection.")
                     return
                 chosen_prop = eligible_props[sel - 1]
                 board_prop = self._get_board_property(chosen_prop)
-                # Vérification de la possession complète du groupe de couleur
+                # Check full ownership of the color group
                 if board_prop["type"] == "property":
                     color_group = [
                         p["name"] for p in self.board.board
@@ -727,102 +992,104 @@ class Game(gym.Env):
 
                     if missing:
                         print(
-                            f"❌ Construction impossible ! Vous devez posséder tout le groupe {board_prop['color_code'].upper()}")
-                        print(f"Propriétés manquantes : {', '.join(missing)}")
+                            f"❌ Cannot build! You must own the entire {board_prop['color_code'].upper()} group.")
+                        print(f"Missing properties: {', '.join(missing)}")
                         return
                 current_houses = board_prop.get("houses", 0)
                 if current_houses >= 4:
-                    print(f"Vous avez déjà le maximum de maisons sur {chosen_prop} (4 maisons maximum).")
+                    print(f"You already have the maximum number of houses on {chosen_prop} (4 max).")
                     return
                 house_cost = int(board_prop["price"] / 2)
                 if player.money < house_cost:
-                    print(f"{player.name} n'a pas assez d'argent pour construire une maison sur {chosen_prop} (coût : {house_cost}€).")
+                    print(
+                        f"{player.name} does not have enough money to build a house on {chosen_prop} (cost: {house_cost}€).")
                     return
                 player.pay(house_cost)
                 board_prop["houses"] = current_houses + 1
-                print(f"Une maison a été construite sur {chosen_prop}. Nombre de maisons maintenant : {board_prop['houses']}.")
-                print(f"Nouveau solde de {player.name} : {player.money}€.")
+                print(f"A house has been built on {chosen_prop}. Houses now: {board_prop['houses']}.")
+                print(f"New balance of {player.name}: {player.money}€.")
             except ValueError:
-                print("Entrée invalide.")
+                print("Invalid input.")
 
         elif choice == "3":
-            # Trade: Acheter une propriété à un autre joueur (argent contre propriété)
-            seller_name = input("Entrez le nom du joueur vendeur : ").strip()
+            # Trade: Buying a property from another player (money for property)
+            seller_name = input("Enter the name of the selling player: ").strip()
             seller = next((p for p in self.players if p.name.lower() == seller_name.lower() and p != player), None)
             if not seller:
-                print("Joueur introuvable ou vous ne pouvez pas trader avec vous-même.")
+                print("Player not found or you cannot trade with yourself.")
                 return
-            property_name = input(f"{seller.name}, entrez le nom de la propriété que vous souhaitez vendre : ").strip()
+            property_name = input(f"{seller.name}, enter the name of the property you want to sell: ").strip()
             Game.trade_action_money_to_card(player, seller, property_name)
 
         elif choice == "4":
-            # Trade: Échanger une propriété contre une autre propriété
-            partner_name = input("Entrez le nom du joueur avec qui vous souhaitez échanger : ").strip()
+            # Trade: Exchanging one property for another property
+            partner_name = input("Enter the name of the player to trade with: ").strip()
             partner = next((p for p in self.players if p.name.lower() == partner_name.lower() and p != player), None)
             if not partner:
-                print("Joueur introuvable ou vous ne pouvez pas trader avec vous-même.")
+                print("Player not found or you cannot trade with yourself.")
                 return
             Game.trade_action_card_to_card(player, partner)
 
         elif choice == "5":
-            print("Aucune action effectuée.")
+            print("No action taken.")
         else:
-            print("Choix invalide.")
+            print("Invalid choice.")
 
     @staticmethod
     def trade_action_money_to_card(buyer: Player, seller: Player, property_name: str):
         if property_name not in seller.properties:
-            print(f"Erreur : {seller.name} ne possède pas la propriété {property_name}.")
+            print(f"Error: {seller.name} does not own the property {property_name}.")
             return
 
         amount_input = input(
-            f"{buyer.name}, combien voulez-vous payer pour acheter {property_name} de {seller.name} ?\nMontant : "
+            f"{buyer.name}, how much would you like to pay to buy {property_name} from {seller.name}?\nAmount: "
         )
         if not amount_input.isnumeric():
-            print("Erreur : veuillez entrer un montant valide (nombre).")
+            print("Error: please enter a valid number.")
             return
 
         amount = int(amount_input)
 
         if buyer.money < amount:
-            print(f"Erreur : {buyer.name} n'a pas assez d'argent pour payer {amount}€.")
+            print(f"Error: {buyer.name} does not have enough money to pay {amount}€.")
             return
 
-        print(f"{buyer.name} paie {amount}€ à {seller.name} pour acheter {property_name}.")
+        print(f"{buyer.name} pays {amount}€ to {seller.name} to purchase {property_name}.")
         buyer.pay(amount)
         seller.receive(amount)
 
         seller.properties.remove(property_name)
         buyer.properties.append(property_name)
-        print(f"Transaction réussie ! {buyer.name} possède maintenant {property_name}.")
-        print(f"Solde de {buyer.name} : {buyer.money}€")
-        print(f"Solde de {seller.name} : {seller.money}€")
+        print(f"Transaction successful! {buyer.name} now owns {property_name}.")
+        print(f"Balance of {buyer.name}: {buyer.money}€")
+        print(f"Balance of {seller.name}: {seller.money}€")
 
     @staticmethod
     def trade_action_card_to_card(buyer: Player, seller: Player):
         buyer_property = input(
-            f"{buyer.name}, entrez le nom de la propriété que vous souhaitez offrir pour l'échange : "
+            f"{buyer.name}, enter the name of the property you want to offer: "
         ).strip()
         if not buyer_property:
-            print("Erreur : vous devez entrer un nom de propriété valide.")
+            print("Error: you must enter a valid property name.")
             return
 
         if buyer_property not in buyer.properties:
-            print(f"Erreur : {buyer.name} ne possède pas la propriété '{buyer_property}'.")
+            print(f"Error: {buyer.name} does not own '{buyer_property}'.")
             return
 
         seller_property = input(
-            f"{seller.name}, entrez le nom de la propriété que vous souhaitez offrir en échange de '{buyer_property}' : "
+            f"{seller.name}, enter the name of the property you want to offer in exchange for '{buyer_property}': "
         ).strip()
         if not seller_property:
-            print("Erreur : vous devez entrer un nom de propriété valide.")
+            print("Error: you must enter a valid property name.")
             return
 
         if seller_property not in seller.properties:
-            print(f"Erreur : {seller.name} ne possède pas la propriété '{seller_property}'.")
+            print(f"Error: {seller.name} does not own '{seller_property}'.")
             return
 
-        print(f"Transaction proposée : {buyer.name} offre '{buyer_property}' en échange de '{seller_property}' de {seller.name}.")
+        print(
+            f"Proposed trade: {buyer.name} offers '{buyer_property}' in exchange for '{seller_property}' from {seller.name}.")
 
         buyer.properties.remove(buyer_property)
         seller.properties.append(buyer_property)
@@ -830,25 +1097,25 @@ class Game(gym.Env):
         seller.properties.remove(seller_property)
         buyer.properties.append(seller_property)
 
-        print("Transaction réussie !")
-        print(f"{buyer.name} possède maintenant : {buyer.properties}")
-        print(f"{seller.name} possède maintenant : {seller.properties}")
+        print("Trade successful!")
+        print(f"{buyer.name} now owns: {buyer.properties}")
+        print(f"{seller.name} now owns: {seller.properties}")
 
     def handle_bankruptcy(self, player: Player, creditor: Optional[Player] = None):
         """
-        Gère la faillite d'un joueur.
-        - Si un créancier (creditor) est précisé, ce dernier reçoit l'argent restant et les propriétés du joueur.
-        - Sinon, les propriétés sont remises sur le marché.
-        Le joueur est ensuite retiré de la partie.
+        Manages a player's bankruptcy.
+        - If a creditor is specified, they receive the remaining money and the player's properties.
+        - Otherwise, the properties are returned to the market.
+        The player is then removed from the game.
         """
-        print(f"🚨 {player.name} est en faillite !")
+        print(f"🚨 {player.name} is bankrupt!")
         if creditor:
-            print(f"Les actifs de {player.name} sont transférés à {creditor.name}.")
+            print(f"{player.name}'s assets are transferred to {creditor.name}.")
             creditor.receive(player.money)
             for prop in player.properties:
                 creditor.properties.append(prop)
         else:
-            print(f"Les propriétés de {player.name} sont remises sur le marché.")
+            print(f"{player.name}'s properties are returned to the market.")
 
         player.money = 0
         player.properties = []
@@ -856,17 +1123,17 @@ class Game(gym.Env):
 
         if player in self.players:
             self.players.remove(player)
-        print(f"{player.name} a été retiré de la partie.")
+        print(f"{player.name} has been removed from the game.")
 
     def auction_property(self, property_name: str, starting_bid: int = 0):
         """
-        Organise une enchère pour la propriété dont le nom est property_name.
-        Tous les joueurs non en faillite participent.
+        Organizes an auction for the property named property_name.
+        All non-bankrupt players participate.
         """
-        print(f"\nLancement de l'enchère pour {property_name} (enchère initiale : {starting_bid}€)")
+        print(f"\nStarting auction for {property_name} (starting bid: {starting_bid}€)")
         eligible_players = [p for p in self.players if not p.bankrupt]
         if not eligible_players:
-            print("Aucun joueur n'est éligible pour participer à l'enchère.")
+            print("No players are eligible to participate in the auction.")
             return
 
         current_bid = starting_bid
@@ -876,36 +1143,38 @@ class Game(gym.Env):
         while len(active_bidders) > 1:
             any_bid_made = False
             for player in active_bidders.copy():
-                print(f"\n{player.name}, le montant actuel est de {current_bid}€.")
-                bid_str = input(f"{player.name}, entrez votre offre (ou appuyez sur Entrée pour passer) : ").strip()
+                print(f"\n{player.name}, the current bid is {current_bid}€.")
+                bid_str = input(f"{player.name}, enter your bid (or press Enter to pass): ").strip()
                 if bid_str == "":
-                    print(f"{player.name} passe et n'est plus éligible pour cette enchère.")
+                    print(f"{player.name} passes and is out of this auction.")
                     active_bidders.remove(player)
                 else:
                     try:
                         bid = int(bid_str)
                         if bid <= current_bid:
-                            print("Votre offre doit être supérieure à l'offre actuelle.")
+                            print("Your bid must be higher than the current bid.")
                         elif bid > player.money:
-                            print("Vous n'avez pas assez d'argent pour proposer cette offre.")
+                            print("You don’t have enough money to make that bid.")
                         else:
                             current_bid = bid
                             highest_bidder = player
                             any_bid_made = True
-                            print(f"{player.name} propose {bid}€.")
+                            print(f"{player.name} bids {bid}€.")
                     except ValueError:
-                        print("Entrée invalide. Vous passez cette ronde.")
+                        print("Invalid input. You skip this round.")
                         active_bidders.remove(player)
             if not any_bid_made:
                 break
 
         if highest_bidder is not None:
-            print(f"\n{highest_bidder.name} remporte l'enchère pour {property_name} avec une offre de {current_bid}€.")
+            print(f"\n{highest_bidder.name} wins the auction for {property_name} with a bid of {current_bid}€.")
             highest_bidder.pay(current_bid)
             highest_bidder.properties.append(property_name)
-            print(f"Le nouveau solde de {highest_bidder.name} est de {highest_bidder.money}€.")
+            print(f"{highest_bidder.name}’s new balance is {highest_bidder.money}€.")
         else:
-            print("Aucune offre n'a été faite pour cette enchère.")
+            print("No bids were made for this auction.")
+
+
 gym.register(
     id="MyMonopolyEnv-v0",
     entry_point="Monopoly_AI.environement.game:Game",

@@ -9,7 +9,7 @@ NUM_PROPERTIES = 28
 MAX_MONEY = 10000
 NUM_CASE = 40
 
-
+#TODO: modifier les méthodes déjà existante pour l'utilisation de l'ia.
 class MonopolyRLEnv(gym.Env):
     """
     Monopoly environment for reinforcement learning that follows the Gymnasium interface.
@@ -399,7 +399,7 @@ class MonopolyRLEnv(gym.Env):
                 case.setdefault("houses", 0)
                 case.setdefault("mortgaged", False)
 
-
+#TODO: implementer méthodes manquante de Game.py à ici
 class MonopolyGame:
     """
     Human-playable Monopoly game class.
@@ -557,6 +557,8 @@ class MonopolyGame:
         tax_amount = tax_case.get("amount", 0)
         print(f"{player.name} pays ${tax_amount} in tax.")
         player.pay(tax_amount)
+
+    # TODO : méthode déjà défini dans `Game.py`, besoins de l'implementer.
 
     @staticmethod
     def _handle_card_case(player: Player, card_type: str):
