@@ -29,8 +29,6 @@ It is designed to support **multi-agent scenarios**, such as training a single R
 2.  Install dependencies (make sure you have Python 3.7+ and pip):
     ```bash
     pip install -r requirements.txt
-    # If you don't have a requirements.txt, install at least gymnasium:
-    # pip install gymnasium
     ```
 
 ## 💡 Usage
