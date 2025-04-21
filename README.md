@@ -23,7 +23,7 @@ It is designed to support **multi-agent scenarios**, such as training a single R
 
 1.  Clone this repository:
     ```bash
-    git clone [https://github.com/AdamArdent/Monopoly_AI_RL.git](https://github.com/AdamArdent/Monopoly_AI_RL.git)
+    git clone https://github.com/AdamArdent/Monopoly_AI_RL.git
     cd Monopoly_AI_RL
     ```
 2.  Install dependencies (make sure you have Python 3.7+ and pip):
